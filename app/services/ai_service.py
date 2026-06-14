@@ -2,18 +2,25 @@ from google import genai
 from google.genai import types
 import json
 import os
-from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from app.models.models import Customer, Order, Campaign, Segment, Message
+from app.models.models import Customer, Campaign, Segment
 from app.services.segmentation import create_segment, get_segment_customers
 from datetime import datetime, timedelta
 
-load_dotenv()
+# Lazy client — only created when first needed
+_client = None
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+def get_client():
+    global _client
+    if _client is None:
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY environment variable not set")
+        _client = genai.Client(api_key=api_key)
+    return _client
 
-# --- Tool definitions (Gemini format) ---
+# --- Tool definitions ---
 
 TOOLS = [
     {
@@ -101,7 +108,7 @@ Format responses in clear, scannable markdown.
 """
 
 
-# --- Tool execution (identical to before) ---
+# --- Tool execution ---
 
 async def execute_tool(tool_name: str, tool_input: dict, db: AsyncSession) -> dict:
 
@@ -237,7 +244,6 @@ async def execute_tool(tool_name: str, tool_input: dict, db: AsyncSession) -> di
 
 async def chat_with_ai(messages: list[dict], db: AsyncSession) -> dict:
 
-    # Convert our messages to Gemini format
     gemini_contents = []
     for msg in messages:
         gemini_contents.append(
@@ -251,8 +257,8 @@ async def chat_with_ai(messages: list[dict], db: AsyncSession) -> dict:
         types.FunctionDeclaration(**t) for t in TOOLS
     ])
 
-    response = client.models.generate_content(
-        model="gemini-3.5-flash",
+    response = get_client().models.generate_content(
+        model="gemini-2.5-flash",
         contents=gemini_contents,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
@@ -262,13 +268,12 @@ async def chat_with_ai(messages: list[dict], db: AsyncSession) -> dict:
 
     tool_results_data = []
 
-    # Handle tool calls in a loop
     while (
         response.candidates and
         response.candidates[0].content.parts and
-        getattr(response.candidates[0].content.parts[0], 'function_call', None) is not None
+        getattr(response.candidates[0].content.parts[0], 'function_call', None) is not None and
+        response.candidates[0].content.parts[0].function_call.name
     ):
-
         part = response.candidates[0].content.parts[0]
         tool_name = part.function_call.name
         tool_input = dict(part.function_call.args)
@@ -276,7 +281,6 @@ async def chat_with_ai(messages: list[dict], db: AsyncSession) -> dict:
         result = await execute_tool(tool_name, tool_input, db)
         tool_results_data.append({"tool": tool_name, "result": result})
 
-        # Add assistant response + tool result to history
         gemini_contents.append(response.candidates[0].content)
         gemini_contents.append(
             types.Content(
@@ -290,8 +294,8 @@ async def chat_with_ai(messages: list[dict], db: AsyncSession) -> dict:
             )
         )
 
-        response = client.models.generate_content(
-            model="gemini-3.5-flash",
+        response = get_client().models.generate_content(
+            model="gemini-2.5-flash",
             contents=gemini_contents,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
@@ -299,7 +303,6 @@ async def chat_with_ai(messages: list[dict], db: AsyncSession) -> dict:
             )
         )
 
-    # Extract final text
     final_text = ""
     for part in response.candidates[0].content.parts:
         if hasattr(part, "text") and part.text:
