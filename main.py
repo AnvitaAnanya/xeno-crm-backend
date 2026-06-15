@@ -2,15 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import segments, campaigns, chat
 
-app = FastAPI(title="Xeno Mini CRM", redirect_slashes=False)
+app = FastAPI(title="Xeno Mini CRM")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://xeno-crm-frontend-website.vercel.app",
-        "*"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
